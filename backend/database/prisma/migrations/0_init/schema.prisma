@@ -1,0 +1,381 @@
+// Prisma Schema for Shop Sphere (Web-Based Shopping Mall System)
+// Derived from EER Diagram & Requirements (Group MLB-B8G1-08)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// Enums
+// ==========================================
+
+enum UserRole {
+  ADMINISTRATOR
+  CUSTOMER
+  VENDOR
+  DELIVERY_STAFF
+}
+
+enum ProductStatus {
+  ACTIVE
+  OUT_OF_STOCK
+  DISCONTINUED
+  INACTIVE
+}
+
+enum CartStatus {
+  ACTIVE
+  CHECKED_OUT
+  ABANDONED
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  CREDIT_CARD
+  DEBIT_CARD
+  PAYPAL
+  CASH_ON_DELIVERY
+  BANK_TRANSFER
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum DiscountType {
+  PERCENTAGE
+  FIXED_AMOUNT
+}
+
+enum PromotionStatus {
+  ACTIVE
+  EXPIRED
+  INACTIVE
+}
+
+enum DeliveryStatus {
+  PENDING
+  OUT_FOR_DELIVERY
+  DELIVERED
+  FAILED
+  RESCHEDULED
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum AvailabilityStatus {
+  AVAILABLE
+  ON_DELIVERY
+  OFF_DUTY
+}
+
+// ==========================================
+// User Superclass & Role Subclasses (ISA Relationship)
+// ==========================================
+
+model User {
+  user_id    String   @id @default(uuid())
+  name       String
+  email      String   @unique
+  password   String
+  phone      String?
+  role       UserRole
+  created_at DateTime @default(now())
+
+  // ISA Subclass 1:1 Relations
+  administrator Administrator?
+  customer      Customer?
+  vendor        Vendor?
+  deliveryStaff DeliveryStaff?
+
+  @@map("users")
+}
+
+model Administrator {
+  user_id     String @id
+  admin_level String // e.g. "SUPER_ADMIN", "MODERATOR"
+
+  user User @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+
+  // Moderation & Management relationships
+  managed_vendors   Vendor[] @relation("AdminManagesVendors")
+  moderated_reviews Review[] @relation("AdminModeratesReviews")
+
+  @@map("administrators")
+}
+
+model Customer {
+  user_id          String  @id
+  shipping_address String?
+  loyalty_points   Int     @default(0)
+
+  user User @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+
+  // Relationships
+  carts   Cart[]
+  orders  Order[]
+  reviews Review[]
+
+  @@map("customers")
+}
+
+model Vendor {
+  user_id         String  @id
+  business_reg_no String  @unique
+  business_name   String
+  admin_id        String? // Admin who manages/approves this vendor
+
+  user User           @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+  admin Administrator? @relation("AdminManagesVendors", fields: [admin_id], references: [user_id])
+
+  // Relationships
+  products Product[]
+
+  @@map("vendors")
+}
+
+model DeliveryStaff {
+  user_id             String             @id
+  availability_status AvailabilityStatus @default(AVAILABLE)
+  vehicle_no          String
+
+  user User @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+
+  // Relationships
+  deliveries Delivery[]
+  orders     Order[]
+
+  @@map("delivery_staff")
+}
+
+// ==========================================
+// Catalog Management (Category, Brand, Product)
+// ==========================================
+
+model Category {
+  category_id   String  @id @default(uuid())
+  category_name String
+  description   String?
+  is_active     Boolean @default(true)
+  is_deleted    Boolean @default(false)
+
+  // Recursive 1:N relationship for categories & sub-categories
+  parent_id     String?
+  parent        Category?  @relation("CategoryToSubcategory", fields: [parent_id], references: [category_id], onDelete: SetNull)
+  subcategories Category[] @relation("CategoryToSubcategory")
+
+  products Product[]
+
+  @@map("categories")
+}
+
+model Brand {
+  brand_id    String  @id @default(uuid())
+  brand_name  String  @unique
+  description String?
+  is_active   Boolean @default(true)
+  is_deleted  Boolean @default(false)
+
+  products Product[]
+
+  @@map("brands")
+}
+
+model Product {
+  product_id          String        @id @default(uuid())
+  product_name        String
+  description         String?
+  image_url           String?
+  price               Decimal       @db.Decimal(10, 2)
+  stock_qty           Int           @default(0)
+  low_stock_threshold Int           @default(5)
+  status              ProductStatus @default(ACTIVE)
+  is_active           Boolean       @default(true)
+  is_deleted          Boolean       @default(false)
+  rating              Decimal       @default(5.0) @db.Decimal(2, 1)
+  rating_stars        String        @default("★★★★★")
+  created_at          DateTime      @default(now())
+
+  category_id String
+  category    Category @relation(fields: [category_id], references: [category_id])
+
+  brand_id String
+  brand    Brand  @relation(fields: [brand_id], references: [brand_id])
+
+  vendor_id String?
+  vendor    Vendor? @relation(fields: [vendor_id], references: [user_id], onDelete: SetNull)
+
+  // Line item and review relations
+  cart_items  CartItem[]
+  order_items OrderItem[]
+  reviews     Review[]
+
+  @@map("products")
+}
+
+// ==========================================
+// Shopping Cart & Line Items
+// ==========================================
+
+model Cart {
+  cart_id     String     @id @default(uuid())
+  customer_id String
+  status      CartStatus @default(ACTIVE)
+  created_at  DateTime   @default(now())
+
+  customer Customer @relation(fields: [customer_id], references: [user_id], onDelete: Cascade)
+
+  cart_items CartItem[]
+  order      Order?     @relation("CartToOrder")
+
+  @@map("carts")
+}
+
+model CartItem {
+  cart_item_id String @id @default(uuid())
+  cart_id      String
+  product_id   String
+  quantity     Int    @default(1)
+
+  cart    Cart    @relation(fields: [cart_id], references: [cart_id], onDelete: Cascade)
+  product Product @relation(fields: [product_id], references: [product_id], onDelete: Cascade)
+
+  @@map("cart_items")
+}
+
+// ==========================================
+// Order Management & Order Items
+// ==========================================
+
+model Order {
+  order_id         String      @id @default(uuid())
+  customer_id      String
+  cart_id          String?     @unique
+  order_date       DateTime    @default(now())
+  shipping_address String
+  status           OrderStatus @default(PENDING)
+  total_amount     Decimal     @db.Decimal(10, 2)
+  staff_id         String?     // Delivery staff assignment
+
+  customer       Customer       @relation(fields: [customer_id], references: [user_id])
+  cart           Cart?          @relation("CartToOrder", fields: [cart_id], references: [cart_id])
+  delivery_staff DeliveryStaff? @relation(fields: [staff_id], references: [user_id])
+
+  order_items OrderItem[]
+  payment     Payment?
+  delivery    Delivery?
+  promotions  OrderPromotion[]
+
+  @@map("orders")
+}
+
+model OrderItem {
+  order_item_id String  @id @default(uuid())
+  order_id      String
+  product_id    String
+  quantity      Int
+  unit_price    Decimal @db.Decimal(10, 2)
+
+  order   Order   @relation(fields: [order_id], references: [order_id], onDelete: Cascade)
+  product Product @relation(fields: [product_id], references: [product_id])
+
+  @@map("order_items")
+}
+
+// ==========================================
+// Payments, Promotions & Delivery
+// ==========================================
+
+model Payment {
+  payment_id     String        @id @default(uuid())
+  order_id       String        @unique
+  amount         Decimal       @db.Decimal(10, 2)
+  payment_method PaymentMethod
+  payment_status PaymentStatus @default(PENDING)
+  payment_date   DateTime      @default(now())
+
+  order Order @relation(fields: [order_id], references: [order_id], onDelete: Cascade)
+
+  @@map("payments")
+}
+
+model Promotion {
+  promotion_id   String          @id @default(uuid())
+  promotion_code String          @unique
+  discount_type  DiscountType
+  discount_value Decimal         @db.Decimal(10, 2)
+  start_date     DateTime
+  end_date       DateTime
+  status         PromotionStatus @default(ACTIVE)
+
+  orders OrderPromotion[]
+
+  @@map("promotions")
+}
+
+// Associative entity linking Orders and Promotions (M:N)
+model OrderPromotion {
+  order_id     String
+  promotion_id String
+
+  order     Order     @relation(fields: [order_id], references: [order_id], onDelete: Cascade)
+  promotion Promotion @relation(fields: [promotion_id], references: [promotion_id], onDelete: Cascade)
+
+  @@id([order_id, promotion_id])
+  @@map("order_promotions")
+}
+
+model Delivery {
+  delivery_id    String         @id @default(uuid())
+  order_id       String         @unique
+  staff_id       String?
+  status         DeliveryStatus @default(PENDING)
+  scheduled_date DateTime?
+
+  order          Order          @relation(fields: [order_id], references: [order_id], onDelete: Cascade)
+  delivery_staff DeliveryStaff? @relation(fields: [staff_id], references: [user_id])
+
+  @@map("deliveries")
+}
+
+// ==========================================
+// Customer Reviews & Feedback
+// ==========================================
+
+model Review {
+  review_id       String       @id @default(uuid())
+  customer_id     String
+  product_id      String
+  comment         String?
+  rating          Int          // 1 - 5 stars
+  rating_stars    String       @default("★★★★★")
+  status          ReviewStatus @default(PENDING)
+  review_date     DateTime     @default(now())
+  moderated_by_id String?      // Admin moderation
+
+  customer     Customer       @relation(fields: [customer_id], references: [user_id], onDelete: Cascade)
+  product      Product        @relation(fields: [product_id], references: [product_id], onDelete: Cascade)
+  moderated_by Administrator? @relation("AdminModeratesReviews", fields: [moderated_by_id], references: [user_id])
+
+  @@map("reviews")
+}
